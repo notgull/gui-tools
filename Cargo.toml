@@ -1,0 +1,9 @@
+[package]
+name = "gui-tools"
+version = "0.0.1"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+authors = ["John Nunley <jtnunley01@gmail.com>"]
+description = "A collection of tools for building GUIs in Rust"
+
+[dependencies]
