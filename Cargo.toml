@@ -7,3 +7,22 @@ authors = ["John Nunley <jtnunley01@gmail.com>"]
 description = "A collection of tools for building GUIs in Rust"
 
 [dependencies]
+async-winit = { version = "0.1.1", default-features = false }
+cfg-if = "1.0.0"
+piet = "0.6.2"
+theo = { git = "https://github.com/notgull/theo.git", version = "0.1.0", default-features = false }
+
+[dev-dependencies]
+async-winit = { version = "0.1.1", default-features = false, features = ["x11"] }
+theo = { git = "https://github.com/notgull/theo.git", default-features = false, features = ["x11", "glx", "egl"] }
+
+[features]
+default = ["x11", "wayland", "egl", "wgl", "glx"]
+x11 = ["async-winit/x11", "theo/x11"]
+wayland = ["async-winit/wayland", "theo/wayland"]
+egl = ["theo/egl"]
+glx = ["theo/glx"]
+wgl = ["theo/wgl"]
+
+[build-dependencies]
+cfg_aliases = "0.1.1"
