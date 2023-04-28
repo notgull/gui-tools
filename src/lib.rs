@@ -29,13 +29,23 @@ License along with `gui-tools`. If not, see <https://www.gnu.org/licenses/>.
 //! None of these crates are publicly exposed, in order to prevent breaking changes in them from
 //! breaking this crate. The only publicly exposed dependency is [`piet`].
 
+use async_winit::dpi::{
+    LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position as WinitPosition,
+    Size as WinitSize,
+};
 use async_winit::event_loop::{EventLoop, EventLoopBuilder};
-use async_winit::window::Window as WinitWindow;
+use async_winit::window::{Window as WinitWindow, WindowBuilder as WinitWindowBuilder};
+use async_winit::Handler;
 
 use std::cell::{Cell, RefCell};
 use std::convert::Infallible;
+use std::fmt;
 use std::future::Future;
 use std::rc::Rc;
+
+// Use kurbo as a public dependency here, since piet is public as well.
+#[doc(inline)]
+pub use kurbo::{Point, Rect, Size};
 
 #[cfg(free_unix)]
 macro_rules! cfg_free_unix {
@@ -84,6 +94,17 @@ enum Repr {
     Piet(piet::Error),
 }
 
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self.0 {
+            Repr::OsError(e) => write!(f, "OS error: {}", e),
+            Repr::Piet(e) => write!(f, "Piet error: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
 impl Error {
     fn os_error(e: async_winit::error::OsError) -> Error {
         Error(Repr::OsError(e))
@@ -91,6 +112,38 @@ impl Error {
 
     fn piet(e: piet::Error) -> Error {
         Error(Repr::Piet(e))
+    }
+}
+
+/// A position that is either physical or logical.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WindowPosition {
+    /// A physical position.
+    Physical(Point),
+
+    /// A logical position.
+    Logical(Point),
+}
+
+impl<T: Into<Point>> From<T> for WindowPosition {
+    fn from(p: T) -> WindowPosition {
+        WindowPosition::Logical(p.into())
+    }
+}
+
+/// A size that is either physical or logical.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WindowSize {
+    /// A physical size.
+    Physical(Size),
+
+    /// A logical size.
+    Logical(Size),
+}
+
+impl<T: Into<Size>> From<T> for WindowSize {
+    fn from(s: T) -> WindowSize {
+        WindowSize::Logical(s.into())
     }
 }
 
@@ -159,20 +212,7 @@ pub struct Window {
 
 impl Window {
     pub async fn new() -> Result<Window, Error> {
-        // Create the winit window.
-        let inner = WinitWindow::new().await.map_err(Error::os_error)?;
-        let size = inner.inner_size().await;
-
-        // Create the surface.
-        let surface = unsafe {
-            DisplayInner::get()
-                .draw
-                .borrow_mut()
-                .make_surface(&inner, size.width, size.height)
-        }
-        .map_err(Error::piet)?;
-
-        Ok(Self { inner, surface })
+        WindowBuilder::new().build().await
     }
 }
 
@@ -289,5 +329,140 @@ cfg_wayland! {
 impl Default for DisplayBuilder {
     fn default() -> DisplayBuilder {
         DisplayBuilder::new()
+    }
+}
+
+pub struct WindowBuilder {
+    inner: WinitWindowBuilder,
+}
+
+impl WindowBuilder {
+    /// Create a new window builder.
+    pub fn new() -> WindowBuilder {
+        WindowBuilder {
+            inner: WinitWindowBuilder::new(),
+        }
+    }
+
+    fn map(self, f: impl FnOnce(WinitWindowBuilder) -> WinitWindowBuilder) -> Self {
+        Self {
+            inner: f(self.inner),
+        }
+    }
+
+    /// Requests the window to be of specific dimensions.
+    #[inline]
+    pub fn with_inner_size(self, size: impl Into<WindowSize>) -> Self {
+        self.map(|x| x.with_inner_size(cvt_size(size)))
+    }
+
+    /// Sets the minimum dimensions that a window can have.
+    #[inline]
+    pub fn with_min_inner_size(self, size: impl Into<WindowSize>) -> Self {
+        self.map(|x| x.with_min_inner_size(cvt_size(size)))
+    }
+
+    /// Sets the maximum dimensions that a window can have.
+    #[inline]
+    pub fn with_max_inner_size(self, size: impl Into<WindowSize>) -> Self {
+        self.map(|x| x.with_max_inner_size(cvt_size(size)))
+    }
+
+    /// Set the initial position of the window.
+    #[inline]
+    pub fn with_position(self, position: impl Into<WindowPosition>) -> Self {
+        self.map(|x| x.with_position(cvt_position(position)))
+    }
+
+    /// Set whether or not the window is resizable.
+    #[inline]
+    pub fn with_resizable(self, resizable: bool) -> Self {
+        self.map(|x| x.with_resizable(resizable))
+    }
+
+    /// Set the title of the window.
+    #[inline]
+    pub fn with_title(self, title: impl Into<String>) -> Self {
+        self.map(|x| x.with_title(title.into()))
+    }
+
+    /// Set whether the window is maximized when first created.
+    #[inline]
+    pub fn with_maximized(self, maximized: bool) -> Self {
+        self.map(|x| x.with_maximized(maximized))
+    }
+
+    /// Set whether the window is visible when first created.
+    #[inline]
+    pub fn with_visible(self, visible: bool) -> Self {
+        self.map(|x| x.with_visible(visible))
+    }
+
+    /// Set whether the window should have borders and bars.
+    #[inline]
+    pub fn with_decorations(self, decorations: bool) -> Self {
+        self.map(|x| x.with_decorations(decorations))
+    }
+
+    /// Sets the resize increments for the window.
+    #[inline]
+    pub fn with_resize_increments(self, increments: impl Into<WindowSize>) -> Self {
+        self.map(|x| x.with_resize_increments(cvt_size(increments.into())))
+    }
+
+    /// Prevents the contents of the window from being captured by other apps.
+    #[inline]
+    pub fn with_content_protected(self, protected: bool) -> Self {
+        self.map(|x| x.with_content_protected(protected))
+    }
+
+    /// Sets whether the window will be initially active or not.
+    #[inline]
+    pub fn with_active(self, active: bool) -> Self {
+        self.map(|x| x.with_active(active))
+    }
+
+    /// Build the window.
+    pub async fn build(self) -> Result<Window, Error> {
+        // Create the winit window.
+        let inner = self.inner.build().await.map_err(Error::os_error)?;
+        let size = inner.inner_size().await;
+
+        // Create the surface.
+        let surface = unsafe {
+            DisplayInner::get()
+                .draw
+                .borrow_mut()
+                .make_surface(&inner, size.width, size.height)
+        }
+        .map_err(Error::piet)?;
+
+        Ok(Window { inner, surface })
+    }
+}
+
+impl Default for WindowBuilder {
+    fn default() -> WindowBuilder {
+        WindowBuilder::new()
+    }
+}
+
+#[inline]
+fn cvt_size(size: impl Into<WindowSize>) -> WinitSize {
+    match size.into() {
+        WindowSize::Physical(sz) => {
+            PhysicalSize::new(sz.width.round() as u32, sz.height.round() as u32).into()
+        }
+        WindowSize::Logical(sz) => LogicalSize::new(sz.width, sz.height).into(),
+    }
+}
+
+#[inline]
+fn cvt_position(posn: impl Into<WindowPosition>) -> WinitPosition {
+    match posn.into() {
+        WindowPosition::Physical(posn) => {
+            PhysicalPosition::new(posn.x as i32, posn.y as i32).into()
+        }
+        WindowPosition::Logical(posn) => LogicalPosition::new(posn.x, posn.y).into(),
     }
 }

@@ -9,6 +9,7 @@ description = "A collection of tools for building GUIs in Rust"
 [dependencies]
 async-winit = { version = "0.1.1", default-features = false }
 cfg-if = "1.0.0"
+kurbo = "0.9.3"
 piet = "0.6.2"
 theo = { git = "https://github.com/notgull/theo.git", version = "0.1.0", default-features = false }
 
