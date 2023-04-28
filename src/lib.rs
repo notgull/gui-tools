@@ -147,6 +147,104 @@ impl<T: Into<Size>> From<T> for WindowSize {
     }
 }
 
+/// Themes available for windows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum Theme {
+    Light,
+    Dark,
+}
+
+/// A handle to a monitor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Monitor(async_winit::monitor::MonitorHandle);
+
+/// A video mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoMode(async_winit::monitor::VideoMode);
+
+/// An icon for a window.
+pub struct Icon(async_winit::window::Icon);
+
+/// The ordering of this window with respect to its Z position.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum WindowLevel {
+    /// The window does not enforce any ordering.
+    Normal,
+
+    /// The window is at the bottom of the stack.
+    Bottom,
+
+    /// The window is at the top of the stack.
+    Top,
+}
+
+/// Whether to display the window in fullscreen mode.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum Fullscreen {
+    /// Display the window in fullscreen mode.
+    Exclusive(VideoMode),
+
+    /// Take up the given monitor (or the primary monitor if `None`).
+    Borderless(Option<Monitor>),
+}
+
+/// The available window buttons.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowButtons {
+    inner: async_winit::window::WindowButtons,
+}
+
+impl Default for WindowButtons {
+    fn default() -> Self {
+        Self {
+            inner: async_winit::window::WindowButtons::all(),
+        }
+    }
+}
+
+impl WindowButtons {
+    /// Create a new `WindowButtons` with no buttons.
+    pub fn none() -> Self {
+        Self {
+            inner: async_winit::window::WindowButtons::empty(),
+        }
+    }
+
+    /// Set the status of the "close" button.
+    pub fn set_close(&mut self, enabled: bool) {
+        if enabled {
+            self.inner.insert(async_winit::window::WindowButtons::CLOSE);
+        } else {
+            self.inner.remove(async_winit::window::WindowButtons::CLOSE);
+        }
+    }
+
+    /// Set the status of the "minimize" button.
+    pub fn set_minimize(&mut self, enabled: bool) {
+        if enabled {
+            self.inner
+                .insert(async_winit::window::WindowButtons::MINIMIZE);
+        } else {
+            self.inner
+                .remove(async_winit::window::WindowButtons::MINIMIZE);
+        }
+    }
+
+    /// Set the status of the "maximize" button.
+    pub fn set_maximize(&mut self, enabled: bool) {
+        if enabled {
+            self.inner
+                .insert(async_winit::window::WindowButtons::MAXIMIZE);
+        } else {
+            self.inner
+                .remove(async_winit::window::WindowButtons::MAXIMIZE);
+        }
+    }
+}
+
 /// The connection to the display server.
 pub struct Display {
     /// The underlying event loop.
@@ -376,6 +474,12 @@ impl WindowBuilder {
         self.map(|x| x.with_resizable(resizable))
     }
 
+    /// Set the buttons on the window.
+    #[inline]
+    pub fn with_window_buttons(self, buttons: impl Into<WindowButtons>) -> Self {
+        self.map(|x| x.with_enabled_buttons(buttons.into().inner))
+    }
+
     /// Set the title of the window.
     #[inline]
     pub fn with_title(self, title: impl Into<String>) -> Self {
@@ -398,6 +502,50 @@ impl WindowBuilder {
     #[inline]
     pub fn with_decorations(self, decorations: bool) -> Self {
         self.map(|x| x.with_decorations(decorations))
+    }
+
+    /// Set whether the window is in fullscreen mode.
+    #[inline]
+    pub fn with_fullscreen(self, fullscreen: impl Into<Option<Fullscreen>>) -> Self {
+        use async_winit::window::Fullscreen as Fs;
+        self.map(|x| {
+            x.with_fullscreen(match fullscreen.into() {
+                None => None,
+                Some(Fullscreen::Borderless(b)) => Some(Fs::Borderless(b.map(|b| b.0))),
+                Some(Fullscreen::Exclusive(e)) => Some(Fs::Exclusive(e.0)),
+            })
+        })
+    }
+
+    /// Set the level of the window.
+    #[inline]
+    pub fn with_window_level(self, level: impl Into<WindowLevel>) -> Self {
+        use async_winit::window::WindowLevel as Wl;
+        self.map(|x| {
+            x.with_window_level(match level.into() {
+                WindowLevel::Normal => Wl::Normal,
+                WindowLevel::Bottom => Wl::AlwaysOnBottom,
+                WindowLevel::Top => Wl::AlwaysOnTop,
+            })
+        })
+    }
+
+    /// Set the icon of the window.
+    #[inline]
+    pub fn with_window_icon(self, icon: impl Into<Option<Icon>>) -> Self {
+        self.map(|x| x.with_window_icon(icon.into().map(|x| x.0)))
+    }
+
+    /// Set the theme of the window.
+    #[inline]
+    pub fn with_theme(self, theme: impl Into<Option<Theme>>) -> Self {
+        self.map(|x| {
+            x.with_theme(match theme.into() {
+                Some(Theme::Dark) => Some(async_winit::window::Theme::Dark),
+                Some(Theme::Light) => Some(async_winit::window::Theme::Light),
+                None => None,
+            })
+        })
     }
 
     /// Sets the resize increments for the window.
@@ -511,7 +659,8 @@ impl WindowBuilder {
                         use async_winit::platform::x11::WindowBuilderExtX11;
 
                         if let Some(visual) = _x11_visual {
-                            window_builder = window_builder.with_x11_visual(visual.as_ptr());
+                            // TODO
+                            //builder = builder.with_x11_visual(visual.as_ptr());
                         }
                     }
 
