@@ -157,8 +157,11 @@ pub struct Display {
 }
 
 struct DisplayInner {
+    /// The handle associated with the display.
+    handle: raw_window_handle::RawDisplayHandle,
+
     /// The inner drawing context.
-    draw: RefCell<theo::Display>,
+    draw: RefCell<Option<theo::Display>>,
 }
 
 impl DisplayInner {
@@ -258,20 +261,13 @@ impl DisplayBuilder {
     pub fn build(self) -> Result<Display, Error> {
         let Self { mut winit, theo } = self;
         let evl = winit.build();
-        let draw = unsafe {
-            theo.unwrap().build({
-                // TODO
-                let x: async_winit::window::Window = todo!();
-                x
-            })
-        }
-        .map_err(Error::piet)?;
 
         Ok(Display {
-            event_loop: Cell::new(Some(evl)),
             inner: Rc::new(DisplayInner {
-                draw: RefCell::new(draw),
+                handle: raw_window_handle::HasRawDisplayHandle::raw_display_handle(&*evl),
+                draw: RefCell::new(None),
             }),
+            event_loop: Cell::new(Some(evl)),
         })
     }
 }
@@ -423,17 +419,117 @@ impl WindowBuilder {
     }
 
     /// Build the window.
+    #[allow(clippy::let_unit_value)]
     pub async fn build(self) -> Result<Window, Error> {
-        // Create the winit window.
-        let inner = self.inner.build().await.map_err(Error::os_error)?;
+        let display = DisplayInner::get();
+        let mut window_builder = Some(self.inner);
+
+        let inner = {
+            // On Windows, we need to initialize the display using a window. Therefore, we can just
+            // build the window and use it to initialize the display if it isn't already.
+            let window = {
+                #[cfg(wgl_backend)]
+                {
+                    if display.draw.borrow().is_some() {
+                        None
+                    } else {
+                        Some(
+                            window_builder
+                                .take()
+                                .unwrap()
+                                .build()
+                                .await
+                                .map_err(Error::os_error)?,
+                        )
+                    }
+                }
+
+                #[cfg(not(wgl_backend))]
+                {
+                    None
+                }
+            };
+
+            // Query the display for window construction parameters.
+            let (transparent, _x11_visual) = {
+                let mut theo_display = display.draw.borrow_mut();
+
+                let theo_display = if let Some(theo_display) = theo_display.as_mut() {
+                    theo_display
+                } else {
+                    // We need to initializet he display.
+                    let mut display_builder = theo::Display::builder();
+
+                    // On Windows, build the window and use it to initialize the display.
+                    #[cfg(wgl_backend)]
+                    {
+                        drop(theo_display);
+                        display_builder = display_builder.window(window.as_ref().unwrap());
+                        theo_display = display.draw.borrow_mut();
+                    }
+
+                    #[cfg(x11_platform)]
+                    {
+                        display_builder = display_builder
+                            .glx_error_hook(async_winit::platform::x11::register_xlib_error_hook);
+                    }
+
+                    // Use the window to initialize the display.
+                    theo_display.insert(unsafe {
+                        display_builder
+                            .build_from_raw(display.handle)
+                            .map_err(Error::piet)?
+                    })
+                };
+
+                // The window wants the transparency support and the X11 visual info.
+                let x11_visual = {
+                    #[cfg(x11_platform)]
+                    {
+                        theo_display.x11_visual()
+                    }
+
+                    #[cfg(not(x11_platform))]
+                    {}
+                };
+
+                (theo_display.supports_transparency(), x11_visual)
+            };
+
+            // Either use the window or create it now.
+            match window {
+                Some(window) => window,
+                None => {
+                    let mut builder = window_builder.take().unwrap();
+
+                    if !transparent {
+                        builder = builder.with_transparent(false);
+                    }
+
+                    #[cfg(x11_platform)]
+                    {
+                        use async_winit::platform::x11::WindowBuilderExtX11;
+
+                        if let Some(visual) = _x11_visual {
+                            window_builder = window_builder.with_x11_visual(visual.as_ptr());
+                        }
+                    }
+
+                    builder.build().await.map_err(Error::os_error)?
+                }
+            }
+        };
+
+        // Get the size to create the surface with.
         let size = inner.inner_size().await;
 
         // Create the surface.
         let surface = unsafe {
-            DisplayInner::get()
-                .draw
-                .borrow_mut()
-                .make_surface(&inner, size.width, size.height)
+            display.draw.borrow_mut().as_mut().unwrap().make_surface(
+                &inner,
+                size.width,
+                size.height,
+            )
         }
         .map_err(Error::piet)?;
 
