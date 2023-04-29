@@ -17,8 +17,7 @@ License along with `gui-tools`. If not, see <https://www.gnu.org/licenses/>.
 
 */
 
-use gui_tools::{Display, DisplayBuilder, Error};
-use std::convert::Infallible;
+use gui_tools::{Display, DisplayBuilder, Error, Exit};
 
 gui_tools::main! {
     fn main(builder: DisplayBuilder) -> Result<(), Error> {
@@ -26,6 +25,6 @@ gui_tools::main! {
     }
 }
 
-async fn main2() -> Infallible {
-    todo!()
+async fn main2() -> Exit {
+    gui_tools::exit().await
 }

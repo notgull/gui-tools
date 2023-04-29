@@ -158,6 +158,26 @@ macro_rules! main {
     };
 }
 
+/// Tell the application to exit.
+#[inline]
+pub async fn exit() -> Exit {
+    let x: Infallible = DisplayInner::get().elwt.exit().await;
+    match x {}
+}
+
+/// Tell the application to exit with a specific exit code.
+#[inline]
+pub async fn exit_with_code(code: i32) -> Exit {
+    let x: Infallible = DisplayInner::get().elwt.exit_with_code(code).await;
+    match x {}
+}
+
+/// The application has exited.
+#[derive(Debug)]
+pub struct Exit {
+    _private: (),
+}
+
 /// A position that is either physical or logical.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum WindowPosition {
@@ -333,13 +353,17 @@ impl DisplayInner {
 
 impl Display {
     /// Run a future.
-    pub fn block_on(&self, f: impl Future<Output = Infallible> + 'static) -> ! {
+    pub fn block_on(&self, f: impl Future<Output = Exit> + 'static) -> ! {
         Self::set_inner(self.inner.clone());
 
         self.event_loop
             .take()
             .expect("Cannot call `block_on` more than once per program")
-            .block_on(f)
+            .block_on(async move {
+                let Exit { _private: () } = f.await;
+
+                panic!("The `block_on` future returned, but it should never return")
+            })
     }
 }
 
@@ -773,13 +797,13 @@ fn cvt_position(posn: impl Into<WindowPosition>) -> WinitPosition {
 pub mod __private {
     use crate::DisplayBuilder;
 
-    #[cfg(target_os = "android")]
-    pub use async_winit::platform::android::activity;
-
     #[cfg(not(target_os = "android"))]
     pub fn new_display_builder() -> DisplayBuilder {
         DisplayBuilder::new()
     }
+
+    #[cfg(target_os = "android")]
+    pub use async_winit::platform::android::activity;
 
     #[cfg(target_os = "android")]
     pub fn with_android_app(app: activity::AndroidApp) -> DisplayBuilder {
