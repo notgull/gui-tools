@@ -33,7 +33,7 @@ use async_winit::dpi::{
     LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position as WinitPosition,
     Size as WinitSize,
 };
-use async_winit::event_loop::{EventLoop, EventLoopBuilder};
+use async_winit::event_loop::{EventLoop, EventLoopBuilder, EventLoopWindowTarget};
 use async_winit::window::{Window as WinitWindow, WindowBuilder as WinitWindowBuilder};
 use async_winit::Handler;
 
@@ -41,6 +41,7 @@ use std::cell::{Cell, RefCell};
 use std::convert::Infallible;
 use std::fmt;
 use std::future::Future;
+use std::marker::PhantomData;
 use std::rc::Rc;
 
 // Use kurbo as a public dependency here, since piet is public as well.
@@ -85,6 +86,18 @@ macro_rules! cfg_wayland {
     ($($i:item)*) => {};
 }
 
+#[cfg(target_os = "android")]
+macro_rules! cfg_android {
+    ($($i:item)*) => {
+        $($i)*
+    };
+}
+
+#[cfg(not(target_os = "android"))]
+macro_rules! cfg_android {
+    ($($i:item)*) => {};
+}
+
 #[derive(Debug)]
 pub struct Error(Repr);
 
@@ -113,6 +126,36 @@ impl Error {
     fn piet(e: piet::Error) -> Error {
         Error(Repr::Piet(e))
     }
+}
+
+/// Set up the program entry point.
+#[macro_export]
+macro_rules! main {
+    (
+        fn main($bident:ident: $bty:ty) $(-> $rty:ty)? $body:block
+    ) => {
+        // On non-android platforms, use the `main` function as the entry point.
+        #[cfg(not(target_os = "android"))]
+        fn main() $(-> $rty)? {
+            #[inline]
+            fn __gui_tools_main_inner($bident: $bty) $(-> $rty)? $body
+            __gui_tools_main_inner($crate::__private::new_display_builder())
+        }
+
+        // On android platforms, use the android_main function as the entry point.
+        #[cfg(target_os = "android")]
+        #[no_mangle]
+        fn android_main(app: $crate::__private::activity::AndroidApp) {
+            #[inline]
+            fn __gui_tools_main_inner($bident: $bty) $(-> $rty)? $body
+            let result = __gui_tools_main_inner(
+                $crate::__private::with_android_app(app)
+            );
+
+            // TODO: Handle the result in some way.
+            let _ = result;
+        }
+    };
 }
 
 /// A position that is either physical or logical.
@@ -258,6 +301,9 @@ struct DisplayInner {
     /// The handle associated with the display.
     handle: raw_window_handle::RawDisplayHandle,
 
+    /// The event loop handle.
+    elwt: EventLoopWindowTarget,
+
     /// The inner drawing context.
     draw: RefCell<Option<theo::Display>>,
 }
@@ -286,11 +332,6 @@ impl DisplayInner {
 }
 
 impl Display {
-    /// Create a new `Display`.
-    pub fn new() -> Result<Display, Error> {
-        DisplayBuilder::new().build()
-    }
-
     /// Run a future.
     pub fn block_on(&self, f: impl Future<Output = Infallible> + 'static) -> ! {
         Self::set_inner(self.inner.clone());
@@ -320,14 +361,16 @@ impl Window {
 pub struct DisplayBuilder {
     winit: EventLoopBuilder,
     theo: Option<theo::DisplayBuilder>,
+    _unsend: PhantomData<*const ()>,
 }
 
 impl DisplayBuilder {
     /// Create a new display builder.
-    pub fn new() -> DisplayBuilder {
+    pub(crate) fn new() -> DisplayBuilder {
         let mut this = DisplayBuilder {
             winit: EventLoopBuilder::new(),
             theo: Some(theo::DisplayBuilder::new()),
+            _unsend: PhantomData,
         };
 
         #[cfg(x11_platform)]
@@ -355,14 +398,27 @@ impl DisplayBuilder {
         self
     }
 
+    cfg_android! {
+        pub(crate) fn with_android_app(
+            &mut self,
+            app: crate::__private::activity::AndroidApp
+        ) -> &mut Self {
+            self.winit.with_android_app(app);
+            self
+        }
+    }
+
     /// Build a new display.
     pub fn build(self) -> Result<Display, Error> {
-        let Self { mut winit, theo } = self;
+        let Self {
+            mut winit, theo, ..
+        } = self;
         let evl = winit.build();
 
         Ok(Display {
             inner: Rc::new(DisplayInner {
                 handle: raw_window_handle::HasRawDisplayHandle::raw_display_handle(&*evl),
+                elwt: evl.window_target().clone(),
                 draw: RefCell::new(None),
             }),
             event_loop: Cell::new(Some(evl)),
@@ -709,5 +765,24 @@ fn cvt_position(posn: impl Into<WindowPosition>) -> WinitPosition {
             PhysicalPosition::new(posn.x as i32, posn.y as i32).into()
         }
         WindowPosition::Logical(posn) => LogicalPosition::new(posn.x, posn.y).into(),
+    }
+}
+
+// Semver exempt.
+#[doc(hidden)]
+pub mod __private {
+    use crate::DisplayBuilder;
+
+    #[cfg(target_os = "android")]
+    pub use async_winit::platform::android::activity;
+
+    #[cfg(not(target_os = "android"))]
+    pub fn new_display_builder() -> DisplayBuilder {
+        DisplayBuilder::new()
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn with_android_app(app: activity::AndroidApp) -> DisplayBuilder {
+        DisplayBuilder::new().with_android_app(app)
     }
 }
