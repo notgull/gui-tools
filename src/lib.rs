@@ -35,30 +35,21 @@ use async_winit::dpi::{
 };
 use async_winit::event_loop::{EventLoop, EventLoopBuilder, EventLoopWindowTarget};
 use async_winit::window::{Window as WinitWindow, WindowBuilder as WinitWindowBuilder};
-use async_winit::Handler;
 
 use std::cell::{Cell, RefCell};
 use std::convert::Infallible;
-use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
 use std::rc::Rc;
+use std::task::{Context, Poll};
+use std::{fmt, mem};
+
+use __private::EventSealed;
 
 // Use kurbo as a public dependency here, since piet is public as well.
 #[doc(inline)]
 pub use kurbo::{Point, Rect, Size};
-
-#[cfg(free_unix)]
-macro_rules! cfg_free_unix {
-    ($($i:item)*) => {
-        $($i)*
-    };
-}
-
-#[cfg(not(free_unix))]
-macro_rules! cfg_free_unix {
-    ($($i:item)*) => {};
-}
 
 #[cfg(x11_platform)]
 macro_rules! cfg_x11 {
@@ -158,9 +149,12 @@ macro_rules! main {
     };
 }
 
+// TODO: Add a test harness.
+
 /// Tell the application to exit.
 #[inline]
 pub async fn exit() -> Exit {
+    // TODO: Properly handle Android exit
     let x: Infallible = DisplayInner::get().elwt.exit().await;
     match x {}
 }
@@ -168,6 +162,7 @@ pub async fn exit() -> Exit {
 /// Tell the application to exit with a specific exit code.
 #[inline]
 pub async fn exit_with_code(code: i32) -> Exit {
+    // TODO: Properly handle Android exit
     let x: Infallible = DisplayInner::get().elwt.exit_with_code(code).await;
     match x {}
 }
@@ -308,6 +303,25 @@ impl WindowButtons {
     }
 }
 
+/// The type of an event that a handler can return.
+pub trait Event: EventSealed {
+}
+impl<T: EventSealed + ?Sized> Event for T {
+}
+
+/// The event handler for some kind of event.
+pub struct Handler<'a, T: Event> {
+    inner: &'a async_winit::Handler<T::AsEvent>
+}
+
+impl<'a, T: Event> Future for Handler<'a, T> {
+    type Output = (); 
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.inner).poll(cx)
+    }
+}
+
 /// The connection to the display server.
 pub struct Display {
     /// The underlying event loop.
@@ -325,7 +339,27 @@ struct DisplayInner {
     elwt: EventLoopWindowTarget,
 
     /// The inner drawing context.
-    draw: RefCell<Option<theo::Display>>,
+    draw: RefCell<DrawState>,
+}
+
+enum DrawState {
+    /// We are still being initialized.
+    Initializing(theo::DisplayBuilder),
+
+    /// We are ready to draw.
+    Ready(theo::Display),
+
+    /// Empty hole.
+    Hole,
+}
+
+impl DrawState {
+    fn ready_mut(&mut self) -> &mut theo::Display {
+        match self {
+            DrawState::Ready(display) => display,
+            _ => panic!("Display not ready"),
+        }
+    }
 }
 
 impl DisplayInner {
@@ -443,7 +477,7 @@ impl DisplayBuilder {
             inner: Rc::new(DisplayInner {
                 handle: raw_window_handle::HasRawDisplayHandle::raw_display_handle(&*evl),
                 elwt: evl.window_target().clone(),
-                draw: RefCell::new(None),
+                draw: RefCell::new(DrawState::Initializing(theo.unwrap())),
             }),
             event_loop: Cell::new(Some(evl)),
         })
@@ -682,11 +716,15 @@ impl WindowBuilder {
             let (transparent, _x11_visual) = {
                 let mut theo_display = display.draw.borrow_mut();
 
-                let theo_display = if let Some(theo_display) = theo_display.as_mut() {
+                let theo_display = if let DrawState::Ready(theo_display) = &mut *theo_display {
                     theo_display
                 } else {
-                    // We need to initializet he display.
-                    let mut display_builder = theo::Display::builder();
+                    // We need to initialize the display.
+                    let mut display_builder =
+                        match mem::replace(&mut *theo_display, DrawState::Hole) {
+                            DrawState::Initializing(init) => init,
+                            _ => unreachable!("cannot poll an empty hole"),
+                        };
 
                     // On Windows, build the window and use it to initialize the display.
                     #[cfg(wgl_backend)]
@@ -703,11 +741,13 @@ impl WindowBuilder {
                     }
 
                     // Use the window to initialize the display.
-                    theo_display.insert(unsafe {
+                    *theo_display = DrawState::Ready(unsafe {
                         display_builder
                             .build_from_raw(display.handle)
                             .map_err(Error::piet)?
-                    })
+                    });
+
+                    theo_display.ready_mut() 
                 };
 
                 // The window wants the transparency support and the X11 visual info.
@@ -754,11 +794,11 @@ impl WindowBuilder {
 
         // Create the surface.
         let surface = unsafe {
-            display.draw.borrow_mut().as_mut().unwrap().make_surface(
-                &inner,
-                size.width,
-                size.height,
-            )
+            display
+                .draw
+                .borrow_mut()
+                .ready_mut()
+                .make_surface(&inner, size.width, size.height)
         }
         .map_err(Error::piet)?;
 
@@ -795,6 +835,7 @@ fn cvt_position(posn: impl Into<WindowPosition>) -> WinitPosition {
 // Semver exempt.
 #[doc(hidden)]
 pub mod __private {
+    use async_winit::Event;
     use crate::DisplayBuilder;
 
     #[cfg(not(target_os = "android"))]
@@ -808,5 +849,10 @@ pub mod __private {
     #[cfg(target_os = "android")]
     pub fn with_android_app(app: activity::AndroidApp) -> DisplayBuilder {
         DisplayBuilder::new().with_android_app(app)
+    }
+
+    #[doc(hidden)]
+    pub trait EventSealed {
+        type AsEvent: Event;
     }
 }

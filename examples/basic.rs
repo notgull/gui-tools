@@ -17,14 +17,22 @@ License along with `gui-tools`. If not, see <https://www.gnu.org/licenses/>.
 
 */
 
-use gui_tools::{Display, DisplayBuilder, Error, Exit};
+use gui_tools::{Display, DisplayBuilder, Error, Exit, WindowBuilder};
 
 gui_tools::main! {
     fn main(builder: DisplayBuilder) -> Result<(), Error> {
-        Ok(builder.build()?.block_on(main2()))
+        match builder.build()?.block_on(main2()) {}
     }
 }
 
 async fn main2() -> Exit {
+    // Create a window.
+    let window = WindowBuilder::new()
+        .with_title("Hello, world!")
+        .with_inner_size((400.0, 300.0))
+        .build()
+        .await
+        .unwrap();
+
     gui_tools::exit().await
 }
