@@ -304,18 +304,16 @@ impl WindowButtons {
 }
 
 /// The type of an event that a handler can return.
-pub trait Event: EventSealed {
-}
-impl<T: EventSealed + ?Sized> Event for T {
-}
+pub trait Event: EventSealed {}
+impl<T: EventSealed + ?Sized> Event for T {}
 
 /// The event handler for some kind of event.
 pub struct Handler<'a, T: Event> {
-    inner: &'a async_winit::Handler<T::AsEvent>
+    inner: &'a async_winit::Handler<T::AsEvent>,
 }
 
 impl<'a, T: Event> Future for Handler<'a, T> {
-    type Output = (); 
+    type Output = <<T as EventSealed>::AsEvent as async_winit::Event>::Clonable;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.inner).poll(cx)
@@ -747,7 +745,7 @@ impl WindowBuilder {
                             .map_err(Error::piet)?
                     });
 
-                    theo_display.ready_mut() 
+                    theo_display.ready_mut()
                 };
 
                 // The window wants the transparency support and the X11 visual info.
@@ -812,6 +810,15 @@ impl Default for WindowBuilder {
     }
 }
 
+impl Window {
+    /// Wait for the window to be closed.
+    pub fn close_requested(&self) -> Handler<'_, ()> {
+        Handler {
+            inner: self.inner.close_requested(),
+        }
+    }
+}
+
 #[inline]
 fn cvt_size(size: impl Into<WindowSize>) -> WinitSize {
     match size.into() {
@@ -835,8 +842,8 @@ fn cvt_position(posn: impl Into<WindowPosition>) -> WinitPosition {
 // Semver exempt.
 #[doc(hidden)]
 pub mod __private {
-    use async_winit::Event;
     use crate::DisplayBuilder;
+    use async_winit::Event;
 
     #[cfg(not(target_os = "android"))]
     pub fn new_display_builder() -> DisplayBuilder {
@@ -854,5 +861,9 @@ pub mod __private {
     #[doc(hidden)]
     pub trait EventSealed {
         type AsEvent: Event;
+    }
+
+    impl<T: Clone + 'static> EventSealed for T {
+        type AsEvent = Self;
     }
 }

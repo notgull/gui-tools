@@ -17,7 +17,7 @@ License along with `gui-tools`. If not, see <https://www.gnu.org/licenses/>.
 
 */
 
-use gui_tools::{Display, DisplayBuilder, Error, Exit, WindowBuilder};
+use gui_tools::{DisplayBuilder, Error, Exit, WindowBuilder};
 
 gui_tools::main! {
     fn main(builder: DisplayBuilder) -> Result<(), Error> {
@@ -33,6 +33,9 @@ async fn main2() -> Exit {
         .build()
         .await
         .unwrap();
+
+    // Wait for the window to exit.
+    window.close_requested().await;
 
     gui_tools::exit().await
 }
