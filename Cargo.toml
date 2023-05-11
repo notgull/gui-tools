@@ -10,12 +10,14 @@ description = "A collection of tools for building GUIs in Rust"
 async-winit = { version = "0.1.1", default-features = false, git = "https://github.com/notgull/async-winit.git" }
 cfg-if = "1.0.0"
 kurbo = "0.9.3" # public
+ouroboros = "0.15.6"
 piet = "0.6.2" # public
 raw-window-handle = "0.5.2"
 theo = { git = "https://github.com/notgull/theo.git", version = "0.1.0", default-features = false }
 
 [dev-dependencies]
 async-winit = { version = "0.1.1", default-features = false, features = ["x11"], git = "https://github.com/notgull/async-winit.git" }
+futures-lite = "1.13.0"
 theo = { git = "https://github.com/notgull/theo.git", default-features = false, features = ["x11", "glx", "egl"] }
 
 [features]

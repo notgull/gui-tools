@@ -17,7 +17,8 @@ License along with `gui-tools`. If not, see <https://www.gnu.org/licenses/>.
 
 */
 
-use gui_tools::{DisplayBuilder, Error, Exit, WindowBuilder};
+use futures_lite::prelude::*;
+use gui_tools::{piet, prelude::*, DisplayBuilder, Error, Exit, WindowBuilder};
 
 gui_tools::main! {
     fn main(builder: DisplayBuilder) -> Result<(), Error> {
@@ -34,8 +35,23 @@ async fn main2() -> Exit {
         .await
         .unwrap();
 
+    // Every time a redraw is requested, clear the screen with the color white.
+    let redraw = async {
+        loop {
+            window.redraw_requested().await;
+            window
+                .draw(|rc| {
+                    rc.clear(None, piet::Color::WHITE);
+                    rc.finish()?;
+
+                    Ok(())
+                })
+                .expect("Failed to draw");
+        }
+    };
+
     // Wait for the window to exit.
-    window.close_requested().await;
+    window.close_requested().or(redraw).await;
 
     gui_tools::exit().await
 }
