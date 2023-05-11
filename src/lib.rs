@@ -35,9 +35,8 @@ use async_winit::dpi::{
 };
 use async_winit::event_loop::{EventLoop, EventLoopBuilder, EventLoopWindowTarget};
 use async_winit::window::{Window as WinitWindow, WindowBuilder as WinitWindowBuilder};
-use piet::IntoBrush;
 
-use std::cell::{Cell, RefCell, RefMut};
+use std::cell::{Cell, RefCell};
 use std::convert::Infallible;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -418,7 +417,10 @@ impl Display {
 }
 
 /// A window.
-pub struct Window {
+#[derive(Clone)]
+pub struct Window(Rc<WindowState>);
+
+struct WindowState {
     /// Handle involving the windowing system.
     inner: WinitWindow,
 
@@ -792,12 +794,13 @@ impl WindowBuilder {
 
                     #[cfg(x11_platform)]
                     {
-                        use async_winit::platform::x11::WindowBuilderExtX11;
+                        /*use async_winit::platform::x11::WindowBuilderExtX11;
 
                         if let Some(visual) = _x11_visual {
                             // TODO
-                            //builder = builder.with_x11_visual(visual.as_ptr());
+                            builder = builder.with_x11_visual(visual.as_ptr());
                         }
+                        */
                     }
 
                     builder.build().await.map_err(Error::os_error)?
@@ -818,10 +821,10 @@ impl WindowBuilder {
         }
         .map_err(Error::piet)?;
 
-        Ok(Window {
+        Ok(Window(Rc::new(WindowState {
             inner,
             surface: RefCell::new(surface),
-        })
+        })))
     }
 }
 
@@ -834,28 +837,30 @@ impl Default for WindowBuilder {
 impl Window {
     /// Wait for the window to be closed.
     pub fn close_requested(&self) -> Handler<'_, ()> {
-        Handler::new(self.inner.close_requested())
+        Handler::new(self.0.inner.close_requested())
     }
 
     /// Wait for a redraw request.
     pub fn redraw_requested(&self) -> Handler<'_, ()> {
-        Handler::new(self.inner.redraw_requested())
+        Handler::new(self.0.inner.redraw_requested())
     }
 
     /// Run a closure with a rendering context.
-    pub fn draw<R>(
+    pub async fn draw<R>(
         &self,
         f: impl FnOnce(&mut RenderContext<'_, '_>) -> Result<R, Error>,
     ) -> Result<R, Error> {
+        let inner_size = self.0.inner.inner_size().await;
         let display = DisplayInner::get();
         let mut draw = display.draw.borrow_mut();
-        let mut surface = self.surface.borrow_mut();
+        let mut surface = self.0.surface.borrow_mut();
         let display = match &mut *draw {
             DrawState::Ready(display) => display,
             _ => unreachable!("cannot poll an empty hole"),
         };
 
-        let mut rc = theo::RenderContext::new(display, &mut surface, 0, 0)?;
+        let mut rc =
+            theo::RenderContext::new(display, &mut surface, inner_size.width, inner_size.height)?;
         let ret = f(&mut RenderContext {
             text: Text {
                 inner: piet::RenderContext::text(&mut rc).clone(),
@@ -1187,9 +1192,12 @@ pub mod __private {
     #[doc(hidden)]
     pub trait EventSealed {
         type AsEvent: Event;
+        fn dibs(window: &crate::Window, clonable: <Self::AsEvent as Event>::Clonable);
     }
 
     impl<T: Clone + 'static> EventSealed for T {
         type AsEvent = Self;
+
+        fn dibs(_window: &crate::Window, _clonable: Self) {}
     }
 }

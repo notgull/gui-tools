@@ -46,6 +46,7 @@ async fn main2() -> Exit {
 
                     Ok(())
                 })
+                .await
                 .expect("Failed to draw");
         }
     };
